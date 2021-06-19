@@ -1,5 +1,4 @@
 #!/bin/sh
-
 # 2021-06-17 kld
 # written on Ubuntu w/dash shell
 
@@ -49,7 +48,8 @@ while true; do
     -d | --dump)
       DUMP=1; shift;;
     -f | --file)
-      FILE=$2; shift;
+      # use alternate db file, for testing perhaps
+      DBFILE=$2; shift;
       shift;;
     -i | --ingest-dir)
       INGEST_DIR=$2; shift;
@@ -128,7 +128,7 @@ insertrow() {
 }
 
 insert_purge_record() {
-    SQL="INSERT INTO purge_records (purge, md5, path, bytes, dtcreated, exifhash)"
+    SQL="INSERT OR IGNORE INTO purge_records (purge, md5, path, bytes, dtcreated, exifhash)"
     SQL="$SQL VALUES (:purge, :md5, :path, :bytes, :dtcreated, :exifhash)"
     sqlite3 $TMPDB "$CMD_OPTS" \
         ".param init" \
@@ -161,11 +161,10 @@ ingestdir() {
     done
 }
 
-DUPES_SQL="SELECT ex.md5, ex.path, ex.bytes, ex.dtcreated, ex.exifhash, grp.cnt"
+DUPES_SELLIST="ex.md5, ex.path, ex.bytes, ex.dtcreated, ex.exifhash, grp.cnt"
 DUPES_SUBQ="SELECT md5, COUNT(*) AS cnt FROM exifdata GROUP BY md5 HAVING cnt > 1"
-DUPES_SQL="$DUPES_SQL FROM exifdata AS ex, ($DUPES_SUBQ) AS grp"
-DUPES_SQL="$DUPES_SQL WHERE ex.md5 = grp.md5 AND grp.cnt IS NOT NULL"
-DUPES_SQL="$DUPES_SQL ORDER BY ex.md5, ex.path;"
+DUPES_SQL="SELECT $DUPES_SELLIST FROM exifdata AS ex, ($DUPES_SUBQ) AS grp"
+DUPES_SQL="$DUPES_SQL WHERE ex.md5 = grp.md5 AND grp.cnt IS NOT NULL ORDER BY ex.md5, ex.path;"
 
 listdupes() {
     sqlite3 "$DBFILE" ".mode column" ".width 32 64 9 18 32 4" "$DUPES_SQL"
@@ -242,7 +241,7 @@ prompt_user_to_delete() {
         ".param clear" | while read field; do
         case "$field" in
           *md5*)
-            record_num=$(($seen_records+1))
+            record_num=$(($record_num+1))
             ;;
         esac
         echo "\t$record_num: $field"
@@ -280,7 +279,7 @@ prompt_user_to_delete() {
         return
         ;;
       y* | Y*)
-        delete_flagged_purgeable "$1"
+        delete_flagged_purgeable "$MD5"
         ;;
       *)
         echo "Unrecognized response. Exiting"
@@ -297,6 +296,17 @@ rmfile() {
         ".param set :path '$1'" \
         "$SQL" \
         ".param clear"
+}
+
+delete_flagged_purgeable() {
+    MD5="$1"
+    SQL="SELECT path FROM purge_records WHERE md5 = :md5 AND purge = 'Delete';"
+    sqlite3 $TMPDB ".mode line" ".param init" ".param set :md5 $MD5" "$SQL" \
+        ".param clear" | while read field; do
+        # see comment in purgedupes for explanation of awk command
+        path=$(echo "$field"|awk '{split($0,kv,"="); gsub(/^[ \t]+|[ \t]+$/,"",kv[2]); print kv[2]}')
+        rmfile "$path"
+    done
 }
 
 if [ -n "$DUMP" ]; then
