@@ -224,29 +224,29 @@ purgedupes() {
 
 prompt_user_to_delete() {
     MD5="$1"
-    local IFS="
-"
-    local SQL="SELECT * FROM purge_records WHERE md5 = :md5"
-    local seen_records=0
-    local seen_purgeable_records=0
-    echo ""
-    # Note: the construct commented here does not work due to the issue described @
+    # As much as spurious trivial queries make me sad, this is far more
+    # straightforward than the hoops necessary to avoid iterating these values
+    # as we go, for reasons described @
     # https://stackoverflow.com/questions/15390635/bash-script-variable-scope-issue
     # in short: putting the `while read` loop in the RHS of pipe puts it in subshell
-    #sqlite3 $TMPDB ".mode line" ".param init" ".param set :md5 $MD5" "$SQL" ".param clear" | while read field; do ... done
-    while read field; do
+    # and avoiding that pipe construct is ugly af
+    local SQL="SELECT COUNT(*) FROM purge_records WHERE md5 = :md5"
+    local seen_records=$(sqlite3 $TMPDB ".param init" ".param set :md5 $MD5" "$SQL" ".param clear")
+    SQL="$SQL AND purge = 'Delete'"
+    local purgeable_records=$(sqlite3 $TMPDB ".param init" ".param set :md5 $MD5" "$SQL" ".param clear")
+    # show user records
+    echo ""
+    record_num=0
+    SQL="SELECT * FROM purge_records WHERE md5 = :md5"
+    sqlite3 $TMPDB ".mode line" ".param init" ".param set :md5 $MD5" "$SQL" \
+        ".param clear" | while read field; do
         case "$field" in
           *md5*)
-            seen_records=$(($seen_records+1))
-            ;;
-          *purge*=*Delete*)
-            seen_purgeable_records=$(($seen_purgeable_records+1))
+            record_num=$(($seen_records+1))
             ;;
         esac
-        echo "\t$seen_records: $field"
-        echo "\trecords seen: $seen_records purgeable: $seen_purgeable_records"
-    done < $(sqlite3 $TMPDB ".mode line" ".param init" ".param set :md5 $MD5" "$SQL" ".param clear")
-    echo "\n\trecords seen: $seen_records purgeable: $seen_purgeable_records\n"
+        echo "\t$record_num: $field"
+    done
     if [ "$seen_purgeable_records" = "0" ]; then
         echo "\n\tNo records flagged for deletion ($seen_purgeable_records)\n"
         # Do you want to allow both copies to remain on disk?
@@ -307,8 +307,10 @@ if [ -n "$DROP" ]; then
 fi
 # createdb is a noop if already exists
 createdb
-sqlite3 "$DBFILE" ".tables" ".indices"
-sqlite3 "$TMPDB" ".tables" ".indices"
+if [ -n "$VERBOSE" ]; then
+    sqlite3 "$DBFILE" ".tables" ".indices"
+    sqlite3 "$TMPDB" ".tables" ".indices"
+fi
 if [ -n "$INGEST_DIR" ]; then
     ingestdir "$INGEST_DIR"
 fi
