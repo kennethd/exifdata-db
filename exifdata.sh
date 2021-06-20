@@ -260,9 +260,15 @@ prompt_user_to_delete() {
         esac
         echo -e "\t$record_num: $field"
     done
+    # Begin interactive prompts
+    # More colors' escape sequences @
+    # https://stackoverflow.com/questions/5947742/how-to-change-the-output-color-of-echo-in-linux
+    local NC='\033[0m' # No Color
+    local RED='\033[0;31m'
+    local GREEN='\033[0;32m'
+    local CYAN='\033[0;36m'
     if [ "$purgeable_records" = "0" ]; then
-        echo -e "\n\tNo records flagged for deletion\n"
-        # Do you want to allow both copies to remain on disk?
+        echo -e "\n\t${RED}No records flagged for deletion${NC}\n"
         read -p "Do you want to delete one of them? " yn < /dev/tty
         case $yn in
           n* | N*)
@@ -280,14 +286,14 @@ prompt_user_to_delete() {
             ;;
         esac 
     elif [ "$purgeable_records" = "$seen_records" ]; then
-        echo -e "\n\tWARNING: all records matching md5 are marked for deletion\n"
+        echo -e "\n\t${RED}WARNING: all records matching md5 are marked for deletion${NC}\n"
     else
-        echo -e "\n\tWe have both purgeable record(s) and non-purgeable record(s)\n"
+        echo -e "\n\t${GREEN}We have both purgeable record(s) and non-purgeable record(s)${NC}\n"
     fi
     read -p "Delete files flagged to purge? " yn < /dev/tty
     case $yn in
       n* | N*)
-        echo "Not deleting. Moving on."
+        echo -e "\n\n${CYAN}Not deleting. Moving on${NC}\n"
         ;;
       y* | Y*)
         delete_flagged_purgeable "$MD5"
