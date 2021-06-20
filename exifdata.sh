@@ -318,9 +318,8 @@ rmfile() {
 delete_flagged_purgeable() {
     MD5="$1"
     SQL="SELECT path FROM purge_records WHERE md5 = :md5 AND purge = 'Delete';"
-    sqlite3 $TMPDB ".mode line" ".param init" ".param set :md5 $MD5" "$SQL" \
-        ".param clear" | while read field; do
-        path=$(echo "$field"|awk '{split($0,kv,"="); gsub(/^[ \t]+|[ \t]+$/,"",kv[2]); print kv[2]}')
+    sqlite3 $TMPDB ".mode tabs" ".param init" ".param set :md5 $MD5" "$SQL" \
+        ".param clear" | while read path; do
         rmfile "$path"
     done
 }
