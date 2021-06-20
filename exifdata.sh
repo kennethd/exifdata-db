@@ -263,21 +263,26 @@ prompt_user_to_delete() {
     # Begin interactive prompts
     # More colors' escape sequences @
     # https://stackoverflow.com/questions/5947742/how-to-change-the-output-color-of-echo-in-linux
-    local NC='\033[0m' # No Color
+    local NC='\033[0m'  # No Color
     local RED='\033[0;31m'
     local GREEN='\033[0;32m'
     local CYAN='\033[0;36m'
     if [ "$purgeable_records" = "0" ]; then
         echo -e "\n\t${RED}No records flagged for deletion${NC}\n"
-        read -p "Do you want to delete one of them? " yn < /dev/tty
+        read -e -p "Do you want to delete the duplicate(s)? " yn < /dev/tty
         case $yn in
           n* | N*)
-            # Skip for now
             return
             ;;
           y* | Y*)
-            read -p "Enter the path of the one to delete: " path < /dev/tty
-            rmfile "$path"
+            read -e -p "Enter the path of the one to ${GREEN}keep${NC}: " keep_path < /dev/tty
+            SQL="SELECT path FROM purge_records WHERE md5 = :md5"
+            sqlite3 $TMPDB ".mode tabs" ".param init" ".param set :md5 $MD5" "$SQL" \
+                ".param clear" | while read path; do
+                if [ "$keep_path" != "$path" ]; then
+                    rmfile "$path"
+                fi
+            done
             return
             ;;
           *)
@@ -287,6 +292,22 @@ prompt_user_to_delete() {
         esac 
     elif [ "$purgeable_records" = "$seen_records" ]; then
         echo -e "\n\t${RED}WARNING: all records matching md5 are marked for deletion${NC}\n"
+        read -e -p "Do you want to keep one of them? " yn < /dev/tty
+        case $yn in
+          n* | N*)
+            return
+            ;;
+          y* | Y*)
+            read -e -p "Enter the path of the one to ${GREEN}keep${NC}: " keep_path < /dev/tty
+            SQL="SELECT path FROM purge_records WHERE md5 = :md5"
+            #rmfile "$path"
+            return
+            ;;
+          *)
+            echo "Unrecognized response"
+            return
+            ;;
+        esac 
     else
         echo -e "\n\t${GREEN}We have both purgeable record(s) and non-purgeable record(s)${NC}\n"
     fi
