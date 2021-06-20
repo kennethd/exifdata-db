@@ -1,6 +1,4 @@
-#!/bin/sh
-# 2021-06-17 kld
-# written on Ubuntu w/dash shell
+#!/bin/bash
 
 usage() {
     cat <<-END
@@ -132,8 +130,8 @@ insert_purge_record() {
     SQL="$SQL VALUES (:purge, :md5, :path, :bytes, :dtcreated, :exifhash)"
     sqlite3 $TMPDB "$CMD_OPTS" \
         ".param init" \
-        ".param set :purge $1" \
-        ".param set :md5 $2" \
+        ".param set :md5 $1" \
+        ".param set :purge $2" \
         ".param set :path '$3'" \
         ".param set :bytes $4" \
         ".param set :dtcreated '$5'" \
@@ -171,9 +169,16 @@ listdupes() {
 }
 
 purgedupes() {
+    # PURGE_DUPES_FROM is a path prefix, something like 'Camera\ Uploads/' (or
+    # wherever your phone automatically uploads them to). After sorting them
+    # into more organized collections, they can be removed from the original dir
     local PURGE_DUPES_FROM="$1"
+    # iterate over any purge_records still in db
+    iterate_purge_records
+    # do not split result on whitespace
     local IFS="
 "
+    # Note: because loop is on RHS of pipe, following block executes in subshell
     sqlite3 "$DBFILE" ".mode line" "$DUPES_SQL" | while read field; do
         # $field input will be something like '   column  =  value   ', it is piped to awk
         # split($0, kv, "=") splits STDIN on "=" char & assigns results to array kv
@@ -181,7 +186,7 @@ purgedupes() {
         # gsub(/.../, "", kv[i]) performs regex substitution on array value;
         # regex /^[ \t]+|[ \t]+$/ matches leading & trailing space, replacing it with empty string
         # final print statement prints updated key & value, separated by ,
-        local kv=$(echo "$field"|awk '{split($0,kv,"="); for (i in kv) {gsub(/^[ \t]+|[ \t]+$/,"",kv[i])}; print kv[1]","kv[2]}')
+        kv=$(echo "$field"|awk '{split($0,kv,"="); for (i in kv) {gsub(/^[ \t]+|[ \t]+$/,"",kv[i])}; print kv[1]","kv[2]}')
         # kv="exifhash,Path to Collection/Foto #1, taken by Ken.jpg"
         k=${kv%,*}  # exifhash
         v=${kv#*,}  # Path to Collection/Foto #1, taken by Ken.jpg
@@ -208,16 +213,25 @@ purgedupes() {
             exifhash="$v"
             ;;
         esac 
-        # have we exhausted all records for $old_md5?
-        if [ "$md5" ] && [ "$old_md5" ] && [ "$md5" != "$old_md5" ]; then
-            prompt_user_to_delete "$old_md5"
-        fi
         # have we seen a complete record?
         if [ "$md5" ] && [ "$path" ] && [ "$purge" ] && [ "$bytes" ] && [ "$dtcreated" ] && [ "$exifhash" ]; then
-            old_md5="$md5"
-            insert_purge_record "$purge" "$md5" "$path" "$bytes" "$dtcreated" "$exifhash"
+            insert_purge_record "$md5" "$purge" "$path" "$bytes" "$dtcreated" "$exifhash"
             unset md5 path purge bytes dtcreated exifhash
         fi
+    done
+    # iterate over any newly added purge_records
+    iterate_purge_records
+}
+
+iterate_purge_records() {
+    local SQL="SELECT DISTINCT(md5) AS md5 FROM purge_records"
+    records=()
+    for field in $(sqlite3 $TMPDB ".headers off" ".mode tabs" "$SQL"); do
+        records+=($field)
+    done
+    echo "Found ${#records[@]} md5s in purge_records"
+    for md5 in "${records[@]}"; do
+        prompt_user_to_delete "$md5"
     done
 }
 
@@ -244,32 +258,29 @@ prompt_user_to_delete() {
             record_num=$(($record_num+1))
             ;;
         esac
-        echo "\t$record_num: $field"
+        echo -e "\t$record_num: $field"
     done
-    if [ "$seen_purgeable_records" = "0" ]; then
-        echo "\n\tNo records flagged for deletion ($seen_purgeable_records)\n"
+    if [ "$purgeable_records" = "0" ]; then
+        echo -e "\n\tNo records flagged for deletion\n"
         # Do you want to allow both copies to remain on disk?
-        read -p "Continue? " yn < /dev/tty
+        read -p "Do you want to delete one of them? " yn < /dev/tty
         case $yn in
           n* | N*)
-            # Which shall I delete?
-            echo "Goodbye."
-            exit 0
+            # Skip for now
             ;;
           y* | Y*)
-            # Removing from duplicates table.
-            # Reingesting the directory will cause them to reappear.
-            return
+            read -p "Enter the path of the one to delete: " path < /dev/tty
+            rmfile "$path"
             ;;
           *)
-            echo "Unrecognized response."
+            echo "Unrecognized response"
             return
             ;;
         esac 
-    elif [ "$seen_purgeable_records" = "$seen_records" ]; then
-        echo "\n\tWARNING: all records matching md5 are marked for deletion\n"
+    elif [ "$purgeable_records" = "$seen_records" ]; then
+        echo -e "\n\tWARNING: all records matching md5 are marked for deletion\n"
     else
-        echo "\n\tWe have both purgeable record(s) and non-purgeable record(s)\n"
+        echo -e "\n\tWe have both purgeable record(s) and non-purgeable record(s)\n"
     fi
     read -p "Delete files flagged to purge? " yn < /dev/tty
     case $yn in
@@ -289,13 +300,19 @@ prompt_user_to_delete() {
 }
 
 rmfile() {
+    # accepts path of record/file to delete
     rm "$1"
-    local SQL="DELETE FROM exifdata WHERE path = :path"
-    sqlite3 $DBFILE "$CMD_OPTS" \
+    local SQL=
+    SQL="SELECT md5 FROM exifdata WHERE path = :path"
+    local md5=$(sqlite3 $DBFILE "$CMD_OPTS" \
         ".param init" \
         ".param set :path '$1'" \
         "$SQL" \
-        ".param clear"
+        ".param clear")
+    SQL="DELETE FROM exifdata WHERE path = :path"
+    sqlite3 $DBFILE "$CMD_OPTS" ".param init" ".param set :path '$1'" "$SQL" ".param clear"
+    SQL="DELETE FROM purge_records WHERE md5 = :md5"
+    sqlite3 $TMPDB ".param init" ".param set :md5 $md5" "$SQL" ".param clear"
 }
 
 delete_flagged_purgeable() {
@@ -303,7 +320,6 @@ delete_flagged_purgeable() {
     SQL="SELECT path FROM purge_records WHERE md5 = :md5 AND purge = 'Delete';"
     sqlite3 $TMPDB ".mode line" ".param init" ".param set :md5 $MD5" "$SQL" \
         ".param clear" | while read field; do
-        # see comment in purgedupes for explanation of awk command
         path=$(echo "$field"|awk '{split($0,kv,"="); gsub(/^[ \t]+|[ \t]+$/,"",kv[2]); print kv[2]}')
         rmfile "$path"
     done
