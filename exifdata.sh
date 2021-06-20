@@ -267,10 +267,12 @@ prompt_user_to_delete() {
         case $yn in
           n* | N*)
             # Skip for now
+            return
             ;;
           y* | Y*)
             read -p "Enter the path of the one to delete: " path < /dev/tty
             rmfile "$path"
+            return
             ;;
           *)
             echo "Unrecognized response"
@@ -286,15 +288,13 @@ prompt_user_to_delete() {
     case $yn in
       n* | N*)
         echo "Not deleting. Moving on."
-        # return control to caller
-        return
         ;;
       y* | Y*)
         delete_flagged_purgeable "$MD5"
         ;;
       *)
-        echo "Unrecognized response. Exiting"
-        exit 1
+        echo "Unrecognized response"
+        return
         ;;
     esac 
 }
