@@ -28,7 +28,7 @@ END
 }
 
 SHORTOPTS='dDf:hi:I:lv'
-LONGOPTS='drop,dump,file:,help,ingest-dir:,ingest-file:,list-duplicates,log,purge-dupes-from:,rm-file:,verbose'
+LONGOPTS='auto-purge-sane,drop,dump,file:,help,ingest-dir:,ingest-file:,list-duplicates,log,purge-dupes-from:,rm-file:,verbose'
 ARGS=$(getopt -o $SHORTOPTS --long $LONGOPTS -- "$@") || exit
 eval "set -- $ARGS"
 
@@ -41,6 +41,10 @@ while true; do
       shift; exit 0;;
     -v | --verbose)
       VERBOSE=1; shift;;
+    --auto-purge-sane)
+      # with --purge-dupes-from, if we have 1 file to keep & 1 to delete,
+      # don't ask, just do it
+      AUTO_PURGE_SANE=1; shift;;
     -D | --drop)
       DROP=1; shift;;
     -d | --dump)
@@ -75,6 +79,7 @@ while true; do
 done
 
 if [ -n "$VERBOSE" ]; then
+    echo AUTO_PURGE_SANE="$AUTO_PURGE_SANE"
     echo DROP="$DROP"
     echo DUMP="$DUMP"
     echo DBFILE="$DBFILE"
@@ -269,13 +274,19 @@ prompt_user_to_delete() {
     local CYAN='\033[0;36m'
     if [ "$purgeable_records" = "0" ]; then
         echo -e "\n\t${RED}No records flagged for deletion${NC}\n"
-        read -e -p "Do you want to delete the duplicate(s)? " yn < /dev/tty
+        read -p "Do you want to delete the duplicate(s)? " yn < /dev/tty
         case $yn in
           n* | N*)
             return
             ;;
           y* | Y*)
-            read -e -p "Enter the path of the one to ${GREEN}keep${NC}: " keep_path < /dev/tty
+            PROMPT="Enter the path of the one to ${GREEN}keep${NC}: "
+            read -p "$(echo -e $PROMPT) " keep_path < /dev/tty
+            if [ ! -f "$keep_path" ]; then
+                echo -e "${RED}No such file:${NC} $keep_path"
+                echo -e "Skipping for now.."
+                return
+            fi
             SQL="SELECT path FROM purge_records WHERE md5 = :md5"
             sqlite3 $TMPDB ".mode tabs" ".param init" ".param set :md5 $MD5" "$SQL" \
                 ".param clear" | while read path; do
@@ -292,13 +303,19 @@ prompt_user_to_delete() {
         esac 
     elif [ "$purgeable_records" = "$seen_records" ]; then
         echo -e "\n\t${RED}WARNING: all records matching md5 are marked for deletion${NC}\n"
-        read -e -p "Do you want to keep one of them? " yn < /dev/tty
+        read -p "Do you want to keep one of them? " yn < /dev/tty
         case $yn in
           n* | N*)
             return
             ;;
           y* | Y*)
-            read -e -p "Enter the path of the one to ${GREEN}keep${NC}: " keep_path < /dev/tty
+            PROMPT="Enter the path of the one to ${GREEN}keep${NC}: "
+            read -p "$(echo -e $PROMPT) " keep_path < /dev/tty
+            if [ ! -f "$keep_path" ]; then
+                echo -e "${RED}No such file:${NC} $keep_path"
+                echo -e "Skipping for now.."
+                return
+            fi
             SQL="SELECT path FROM purge_records WHERE md5 = :md5"
             #rmfile "$path"
             return
@@ -310,20 +327,26 @@ prompt_user_to_delete() {
         esac 
     else
         echo -e "\n\t${GREEN}We have both purgeable record(s) and non-purgeable record(s)${NC}\n"
+        if [ -n "$AUTO_PURGE_SANE" ]; then
+            delete_flagged_purgeable "$MD5"
+            return
+        fi
+        read -p "Delete files flagged to purge? " yn < /dev/tty
+        case $yn in
+          n* | N*)
+            echo -e "\n\n${CYAN}Not deleting. Moving on${NC}\n"
+            return
+            ;;
+          y* | Y*)
+            delete_flagged_purgeable "$MD5"
+            return
+            ;;
+          *)
+            echo "Unrecognized response"
+            return
+            ;;
+        esac 
     fi
-    read -p "Delete files flagged to purge? " yn < /dev/tty
-    case $yn in
-      n* | N*)
-        echo -e "\n\n${CYAN}Not deleting. Moving on${NC}\n"
-        ;;
-      y* | Y*)
-        delete_flagged_purgeable "$MD5"
-        ;;
-      *)
-        echo "Unrecognized response"
-        return
-        ;;
-    esac 
 }
 
 rmfile() {
