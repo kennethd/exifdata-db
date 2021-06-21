@@ -317,7 +317,12 @@ prompt_user_to_delete() {
                 return
             fi
             SQL="SELECT path FROM purge_records WHERE md5 = :md5"
-            #rmfile "$path"
+            sqlite3 $TMPDB ".mode tabs" ".param init" ".param set :md5 $MD5" "$SQL" \
+                ".param clear" | while read path; do
+                if [ "$keep_path" != "$path" ]; then
+                    rmfile "$path"
+                fi
+            done
             return
             ;;
           *)
